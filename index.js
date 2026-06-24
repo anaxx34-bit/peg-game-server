@@ -1,5 +1,6 @@
 const { WebSocketServer } = require('ws');
 const http = require('http');
+const ServerGame = require('./game');
 
 const PORT = process.env.PORT || 8080;
 
@@ -282,6 +283,18 @@ wss.on('connection', (ws) => {
               existingPlayer.isConnected = true;
               existingPlayer.ws = ws;
 
+              if (room.gameInstance) {
+                const gamePlayer = room.gameInstance.players.find(p => p.id === message.playerId);
+                if (gamePlayer) {
+                  gamePlayer.isConnected = true;
+                }
+                // Sync host just in case
+                room.gameInstance.players.forEach(p => {
+                  p.isHost = (p.id === room.hostId);
+                });
+                room.gameState = room.gameInstance.getSnapshot();
+              }
+
               // Cancel any pending room deletion
               if (room.deleteTimer) {
                 clearTimeout(room.deleteTimer);
@@ -504,8 +517,6 @@ wss.on('connection', (ws) => {
           if (room.hostId !== currentPlayerId) return;
 
           room.inGame = true;
-          room.pegs = message.pegs;
-          room.gameState = null;
           room.settings = {
             continueTurnOnMatch: message.continueTurnOnMatch,
             timerEnabled: message.timerEnabled,
@@ -515,13 +526,18 @@ wss.on('connection', (ws) => {
             pegFinish: message.pegFinish,
           };
 
+          const game = new ServerGame(currentRoomCode, message.players, message.pegs, room.settings);
+          room.gameInstance = game;
+          room.gameState = game.getSnapshot();
+          room.pegs = game.pegs;
+
           broadcastToRoom(currentRoomCode, {
             type: 'game_started',
-            players: message.players,
-            pegs: message.pegs,
-            continueTurnOnMatch: message.continueTurnOnMatch,
-            timerEnabled: message.timerEnabled,
-            turnTimerSeconds: message.turnTimerSeconds,
+            players: game.players,
+            pegs: game.pegs,
+            continueTurnOnMatch: game.continueTurnOnMatch,
+            timerEnabled: game.timerEnabled,
+            turnTimerSeconds: game.turnTimerSeconds,
             boardStyle: message.boardStyle,
             boardFinish: message.boardFinish,
             pegFinish: message.pegFinish,
@@ -598,13 +614,44 @@ wss.on('connection', (ws) => {
         case 'game_action': {
           const rc = currentRoomCode || (message.roomCode ? message.roomCode.toUpperCase() : null);
           if (!rc) return;
-          // Also fix currentRoomCode if it was lost
           if (!currentRoomCode && rc) currentRoomCode = rc;
-          broadcastToRoom(rc, {
-            type: 'game_action',
-            action: message.action,
-            senderId: currentPlayerId,
-          });
+
+          const room = rooms.get(rc);
+          if (room && room.inGame && room.gameInstance) {
+            const action = message.action;
+            let result = null;
+
+            if (action.type === 'roll_request') {
+              result = room.gameInstance.handleRollRequest(currentPlayerId, action.color);
+            } else if (action.type === 'pick_request') {
+              result = room.gameInstance.handlePickRequest(currentPlayerId, action.pegId);
+            } else if (action.type === 'swap_request') {
+              result = room.gameInstance.handleSwapRequest(currentPlayerId, action.color);
+            } else if (action.type === 'powerup_request') {
+              result = room.gameInstance.handlePowerUpRequest(currentPlayerId, action.powerUpType);
+            } else if (action.type === 'timeout') {
+              result = room.gameInstance.handleTimeout();
+            } else if (action.type === 'emoji' || action.type === 'chat_quote') {
+              broadcastToRoom(rc, {
+                type: 'game_action',
+                action: action,
+                senderId: currentPlayerId,
+              });
+              return;
+            }
+
+            if (result) {
+              room.gameState = room.gameInstance.getSnapshot();
+              room.pegs = room.gameInstance.pegs;
+
+              broadcastToRoom(rc, {
+                type: 'game_action',
+                action: result,
+                senderId: currentPlayerId,
+              });
+              return;
+            }
+          }
           break;
         }
       }
@@ -629,6 +676,14 @@ wss.on('connection', (ws) => {
             player.ws = null;
             console.log(`Player ${player.name} disconnected (in-game) from room ${currentRoomCode}`);
 
+            if (room.gameInstance) {
+              const gamePlayer = room.gameInstance.players.find(p => p.id === currentPlayerId);
+              if (gamePlayer) {
+                gamePlayer.isConnected = false;
+                gamePlayer.isHost = false;
+              }
+            }
+
             // Migrate host if needed
             if (currentPlayerId === room.hostId) {
               const nextHuman = room.players.find(p => p.type === 'human' && p.isConnected);
@@ -638,6 +693,13 @@ wss.on('connection', (ws) => {
                 nextHuman.isHost = true;
                 nextHuman.isReady = true;
                 console.log(`Host migrated to ${nextHuman.name} in room ${currentRoomCode}`);
+              }
+            }
+
+            if (room.gameInstance) {
+              const nextHostPlayer = room.gameInstance.players.find(p => p.id === room.hostId);
+              if (nextHostPlayer) {
+                nextHostPlayer.isHost = true;
               }
             }
 
@@ -693,6 +755,24 @@ wss.on('connection', (ws) => {
     console.error('WS Error:', err);
   });
 });
+
+// Start a global interval timer to tick all active games
+setInterval(() => {
+  rooms.forEach((room, roomCode) => {
+    if (room.inGame && room.gameInstance) {
+      const result = room.gameInstance.tick();
+      if (result) {
+        room.gameState = room.gameInstance.getSnapshot();
+        room.pegs = room.gameInstance.pegs;
+        broadcastToRoom(roomCode, {
+          type: 'game_action',
+          action: result,
+          senderId: room.gameInstance.players[room.gameInstance.currentPlayerIndex].id
+        });
+      }
+    }
+  });
+}, 1000);
 
 server.listen(PORT, () => {
   console.log(`WebSocket Server is listening on http://localhost:${PORT}`);
