@@ -77,6 +77,11 @@ class ServerGame {
     if (this.phase !== 'waitingForRoll') return null;
     if (this.players[this.currentPlayerIndex].id !== playerId) return null;
 
+    // Hide all non-collected pegs when starting a new roll/turn
+    this.pegs.forEach(p => {
+      if (!p.isCollected) p.isRevealed = false;
+    });
+
     // Use forced color (from optimistic client generation) or choose random
     let color = colorName;
     if (!color) {
@@ -113,6 +118,11 @@ class ServerGame {
     if (!color) {
       color = this.rollDice(this.diceColor);
     }
+
+    // Hide all non-collected pegs when swapping
+    this.pegs.forEach(p => {
+      if (!p.isCollected) p.isRevealed = false;
+    });
 
     this.rolledColor = color;
     this.diceColor = color;
@@ -310,6 +320,9 @@ class ServerGame {
         this.shieldArmed = false;
         this.lastPickedPegId = pegId;
         this.message = 'Shield protected your streak! Try picking again.';
+        this.pegs.forEach(p => {
+          if (!p.isCollected) p.isRevealed = false;
+        });
         // Player gets to retry pick immediately, turn does not change
       } else if (usingSecondChance) {
         player.secondChances -= 1;
@@ -321,6 +334,9 @@ class ServerGame {
         this.phase = 'waitingForRoll';
         this.turnTimeLeft = this.turnTimerSeconds;
         this.message = 'Second Chance used! Roll the dice again.';
+        this.pegs.forEach(p => {
+          if (!p.isCollected) p.isRevealed = false;
+        });
       } else {
         if (revealPicked) peg.isRevealed = true;
         player.correctStreak = 0;
