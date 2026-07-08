@@ -1,0 +1,12 @@
+{
+  "name": "peg-notifications",
+  "version": "1.0.0",
+  "description": "PEG Game — daily motivational push notification sender",
+  "main": "send_daily_notifications.js",
+  "scripts": {
+    "send": "node send_daily_notifications.js"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}

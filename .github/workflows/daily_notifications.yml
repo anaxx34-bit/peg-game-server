@@ -1,0 +1,35 @@
+name: Daily Motivational Notifications
+
+on:
+  # Run every day at 7 PM IST = 13:30 UTC
+  schedule:
+    - cron: '30 13 * * *'
+
+  # Allow manual trigger from GitHub UI for testing
+  workflow_dispatch:
+
+jobs:
+  send-notifications:
+    name: Send Daily Push Notifications
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: notifications/package.json
+
+      - name: Install dependencies
+        working-directory: notifications
+        run: npm install
+
+      - name: Send daily motivational notifications
+        working-directory: notifications
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: node send_daily_notifications.js
