@@ -1,9 +1,9 @@
 name: Daily Motivational Notifications
 
 on:
-  # Run every day at 7 PM IST = 13:30 UTC
+  # Run twice a day: 10:00 AM IST (04:30 UTC) and 7:00 PM IST (13:30 UTC)
   schedule:
-    - cron: '30 13 * * *'
+    - cron: '30 4,13 * * *'
 
   # Allow manual trigger from GitHub UI for testing
   workflow_dispatch:
