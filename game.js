@@ -473,8 +473,26 @@ class ServerGame {
     }
 
     return {
-      winners: winners.map(w => ({ id: w.id, name: w.name, score: w.score, collection: w.collection })),
-      players: sorted.map(p => ({ id: p.id, name: p.name, score: p.score, collection: p.collection })),
+      winners: winners.map(w => ({
+        id: w.id,
+        name: w.name,
+        type: w.type,
+        score: w.score,
+        collection: w.collection,
+        avatarEmoji: w.avatarEmoji,
+        colorValue: w.colorValue,
+        level: w.level
+      })),
+      players: sorted.map(p => ({
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        score: p.score,
+        collection: p.collection,
+        avatarEmoji: p.avatarEmoji,
+        colorValue: p.colorValue,
+        level: p.level
+      })),
       reason: reason
     };
   }

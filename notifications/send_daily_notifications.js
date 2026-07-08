@@ -30,40 +30,68 @@ const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
  */
 function buildMessage(player, abovePlayer, rank, totalPlayers) {
   const name = player.nickname || 'Player';
+  const xp = player.xp;
+  const gamesPlayed = player.gamesPlayed;
+  const gamesWon = player.gamesWon;
+  const loginStreak = player.loginStreak;
 
-  // ── #1 — defend your crown ──────────────────────────────────────────────────
-  if (rank === 1) {
+  // 1. New Player (0 games played)
+  if (gamesPlayed === 0) {
     return pick([
-      { title: "👑 You're on top!", body: `You're #1 on the PEG leaderboard, ${name}! Keep playing to defend your crown.` },
-      { title: '🔥 Undefeated Leader!', body: `${name}, you're still the #1 player! Don't let anyone catch up — play now.` },
-      { title: '🏆 Still #1!', body: `No one has beaten you yet, ${name}. Stay on top — open PEG and dominate!` },
+      { title: `🎲 Welcome to PEG, ${name}!`, body: "Ready to roll? Play your very first match and start climbing the leaderboard! 🚀" },
+      { title: `🎮 Start your journey, ${name}!`, body: "Learn the rules and win your first game. Play now! 🏆" },
+      { title: `⚡ Tap to Play!`, body: "Your board is waiting. Roll the dice and collect pegs to level up!" },
     ]);
   }
 
-  // ── Top 3 — so close to #1 ──────────────────────────────────────────────────
-  if (rank <= 3) {
-    const aboveName = abovePlayer?.nickname || 'someone';
+  // 2. No wins yet
+  if (gamesWon === 0) {
     return pick([
-      { title: `🥇 So close to #1, ${name}!`, body: `${aboveName} is just ahead at #${rank - 1}. Play now and take the top spot! 🎮` },
-      { title: `⚡ One game away from glory!`, body: `You're at #${rank}. ${aboveName} is just above you — challenge them now!` },
+      { title: `🎯 Ready for your first win, ${name}?`, body: `You've played ${gamesPlayed} matches. Keep trying — your first victory is close! 🏆` },
+      { title: `⚔️ Challenge a Bot, ${name}!`, body: "Practice your strategy against the AI and unlock new levels!" },
     ]);
   }
 
-  // ── Someone is beating the player ───────────────────────────────────────────
-  if (abovePlayer) {
+  // 3. Keep streak alive (if they have a login streak >= 2)
+  if (loginStreak >= 2) {
+    return { 
+      title: `🔥 Streak Alert, ${name}!`, 
+      body: `Keep your ${loginStreak}-day login streak alive! Log in now and claim your daily reward. 💎` 
+    };
+  }
+
+  // 4. Player has real XP and is #1
+  if (rank === 1 && xp > 0) {
+    return pick([
+      { title: "👑 You're the Champion!", body: `You're #1 on the global leaderboard with ${xp} XP, ${name}! Defend your title now.` },
+      { title: '🏆 Global Leader!', body: `${name}, you're still ruling the board. Open PEG and play to keep your crown!` },
+    ]);
+  }
+
+  // 5. Close competitor ahead (Top 3)
+  if (rank <= 3 && abovePlayer && xp > 0) {
+    const aboveName = abovePlayer.nickname || 'Someone';
+    const xpDiff = abovePlayer.xp - xp;
+    return pick([
+      { title: `🥇 So close to #1, ${name}!`, body: `${aboveName} is at #${rank - 1} with ${abovePlayer.xp} XP. Play now to overtake them! 🎮` },
+      { title: `⚡ Just ${xpDiff} XP away!`, body: `You need only ${xpDiff} XP to beat ${aboveName} and rank up. Go for it! 🚀` },
+    ]);
+  }
+
+  // 6. Overtaken rank alert (if they have real XP)
+  if (abovePlayer && xp > 0) {
     const aboveName = abovePlayer.nickname || 'Another player';
     return pick([
-      { title: `😤 ${aboveName} is ahead of you!`, body: `${aboveName} knocked you to #${rank}. Open PEG and take back your spot! 🎯` },
-      { title: `⚔️ You're being overtaken!`, body: `${aboveName} is now ranked #${rank - 1}. Don't let them stay ahead — play now!` },
-      { title: `🔔 Rank Alert, ${name}!`, body: `You're at #${rank} and ${aboveName} is beating you. Fight back in PEG! 💪` },
+      { title: `😤 Overtake Alert, ${name}!`, body: `${aboveName} is ranked #${rank - 1} with ${abovePlayer.xp} XP. Beat their score! 🎯` },
+      { title: `⚔️ Climb the ranks!`, body: `You are currently #${rank}. Open PEG and play a match to boost your level! 💪` },
     ]);
   }
 
-  // ── Generic motivator ────────────────────────────────────────────────────────
+  // 7. Generic Motivator
   return pick([
-    { title: `🎮 Time to play, ${name}!`, body: `You're ranked #${rank} of ${totalPlayers}. Climb higher — open PEG now!` },
-    { title: `📈 Keep climbing, ${name}!`, body: `Your rank is #${rank}. One game could move you up. Let's go! 🚀` },
-    { title: `🏅 Daily Challenge Awaits!`, body: `${name}, your rank is #${rank}. Jump in and earn more XP today!` },
+    { title: `🎮 Time to play, ${name}!`, body: `You're ranked #${rank} out of ${totalPlayers} players. Climb higher — open PEG now!` },
+    { title: `📈 Keep climbing, ${name}!`, body: `With ${xp} XP, you are at rank #${rank}. One win could move you up! Let's go! 🚀` },
+    { title: `🏅 Challenge of the Day!`, body: `${name}, open PEG now to check today's daily quests and earn coins!` },
   ]);
 }
 
@@ -84,16 +112,23 @@ async function sendDailyNotifications() {
     return;
   }
 
-  // Build user list with XP computed client-side (same formula as Flutter app)
+  // Build user list with XP computed client-side
   const users = snapshot.docs.map(doc => {
     const d = doc.data();
+    const totalScore = parseInt(d.totalScore) || 0;
+    const gamesWon = parseInt(d.gamesWon) || 0;
+    const xp = parseInt(d.customXp ?? d.xp) || (totalScore + gamesWon * 15);
+    
     return {
-      uid:        doc.id,
-      nickname:   d.nickname   || 'Player',
-      totalScore: d.totalScore || 0,
-      gamesWon:   d.gamesWon   || 0,
-      fcmToken:   d.fcmToken,
-      xp:         (d.totalScore || 0) + (d.gamesWon || 0) * 15,
+      uid:         doc.id,
+      nickname:    d.nickname || 'Player',
+      totalScore:  totalScore,
+      gamesWon:    gamesWon,
+      gamesPlayed: parseInt(d.gamesPlayed) || 0,
+      fcmToken:    d.fcmToken,
+      xp:          xp,
+      loginStreak: parseInt(d.loginStreak) || 0,
+      level:       parseInt(d.level) || 1,
     };
   });
 

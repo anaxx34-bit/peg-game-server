@@ -17,6 +17,9 @@ const rooms = new Map();
 // Set of all connected clients (for public room broadcasts)
 const allClients = new Set();
 
+// Map of active online players: playerId -> WebSocket object
+const activePlayers = new Map();
+
 // Grace period before deleting an empty in-game room (ms)
 const ROOM_DELETE_GRACE_MS = 90000; // 90 seconds
 
@@ -143,6 +146,76 @@ wss.on('connection', (ws) => {
           break;
         }
 
+        case 'register_player': {
+          currentPlayerId = message.playerId;
+          if (currentPlayerId) {
+            ws.playerId = currentPlayerId;
+            ws.playerName = message.playerName || 'Guest';
+            ws.playerEmoji = message.avatarEmoji || '👤';
+            ws.playerColor = message.colorValue || 0xff2d8c83;
+            ws.playerLevel = message.level || 1;
+            activePlayers.set(currentPlayerId, ws);
+            console.log(`Registered player ${ws.playerName} (${currentPlayerId}) as online`);
+          }
+          break;
+        }
+
+        case 'get_online_friends': {
+          const friendIds = message.friendIds || [];
+          const onlineFriends = [];
+          friendIds.forEach(fid => {
+            const friendSocket = activePlayers.get(fid);
+            if (friendSocket && friendSocket.readyState === 1) {
+              onlineFriends.push({
+                id: fid,
+                name: friendSocket.playerName || 'Guest',
+                avatarEmoji: friendSocket.playerEmoji || '👤',
+                colorValue: friendSocket.playerColor || 0xff2d8c83,
+                level: friendSocket.playerLevel || 1,
+                status: friendSocket.currentRoomCode ? 'in_game' : 'online',
+              });
+            }
+          });
+          ws.send(JSON.stringify({
+            type: 'online_friends_update',
+            friends: onlineFriends,
+          }));
+          break;
+        }
+
+        case 'send_invite': {
+          const targetPlayerId = message.targetPlayerId;
+          const roomCode = message.roomCode;
+          const senderName = message.senderName || 'A friend';
+          const senderEmoji = message.senderEmoji || '🦊';
+
+          console.log(`Sending invite from ${senderName} to ${targetPlayerId} for room ${roomCode}`);
+
+          const targetSocket = activePlayers.get(targetPlayerId);
+          if (targetSocket && targetSocket.readyState === 1) {
+            targetSocket.send(JSON.stringify({
+              type: 'invite_received',
+              senderId: currentPlayerId,
+              senderName: senderName,
+              senderEmoji: senderEmoji,
+              roomCode: roomCode,
+            }));
+            ws.send(JSON.stringify({
+              type: 'invite_sent_status',
+              success: true,
+              targetPlayerId: targetPlayerId,
+            }));
+          } else {
+            ws.send(JSON.stringify({
+              type: 'invite_sent_status',
+              success: false,
+              message: 'Player is offline',
+              targetPlayerId: targetPlayerId,
+            }));
+          }
+          break;
+        }
+
         case 'create_room': {
           const roomCode = generateRoomCode();
           currentPlayerId = message.playerId;
@@ -241,27 +314,62 @@ wss.on('connection', (ws) => {
           break;
         }
 
+        case 'player_waiting_in_lobby': {
+          // A player navigated to lobby/room from result screen — notify others still waiting
+          if (!currentRoomCode) return;
+          const room = rooms.get(currentRoomCode);
+          if (!room) return;
+          const sender = room.players.find(p => p.id === currentPlayerId);
+          if (!sender) return;
+
+          // Broadcast to all OTHER players in the room
+          const notifyData = JSON.stringify({
+            type: 'player_waiting_lobby',
+            playerName: sender.name,
+            playerEmoji: sender.avatarEmoji || '👤',
+          });
+          room.players.forEach(player => {
+            if (player.id !== currentPlayerId && player.ws && player.ws.readyState === 1) {
+              player.ws.send(notifyData);
+            }
+          });
+          console.log(`${sender.name} is waiting in lobby for room ${currentRoomCode}`);
+          break;
+        }
+
         case 'return_to_lobby': {
           if (!currentRoomCode) return;
           const room = rooms.get(currentRoomCode);
           if (!room) return;
 
-          room.inGame = false;
-          room.pegs = null;
-          room.gameState = null;
-          room.players.forEach(p => {
-            p.isReady = (p.id === room.hostId);
-          });
+          // Only perform room state reset if we are actually transitioning from active play to lobby
+          if (room.inGame) {
+            room.inGame = false;
+            room.pegs = null;
+            room.gameState = null;
+            room.players.forEach(p => {
+              p.isReady = (p.id === room.hostId);
+            });
 
-          broadcastToRoom(currentRoomCode, {
-            type: 'returned_to_lobby',
-            players: room.players.map(p => getClientInfo(p)),
-            hostId: room.hostId,
-            entryFee: room.entryFee || 100,
-          });
-          console.log(`Room ${currentRoomCode} returned to lobby`);
+            broadcastToRoom(currentRoomCode, {
+              type: 'returned_to_lobby',
+              players: room.players.map(p => getClientInfo(p)),
+              hostId: room.hostId,
+              entryFee: room.entryFee || 100,
+            });
+            console.log(`Room ${currentRoomCode} returned to lobby (state reset)`);
 
-          if (room.isPublic) broadcastPublicRooms();
+            if (room.isPublic) broadcastPublicRooms();
+          } else {
+            // Already in lobby (e.g. host returned first), just send current lobby info back to this client
+            ws.send(JSON.stringify({
+              type: 'returned_to_lobby',
+              players: room.players.map(p => getClientInfo(p)),
+              hostId: room.hostId,
+              entryFee: room.entryFee || 100,
+            }));
+            console.log(`Room ${currentRoomCode} already in lobby, synced client`);
+          }
           break;
         }
 
@@ -655,6 +763,14 @@ wss.on('connection', (ws) => {
           break;
         }
       }
+
+      // Keep presence properties synchronized
+      if (currentPlayerId) {
+        ws.playerId = currentPlayerId;
+        activePlayers.set(currentPlayerId, ws);
+      }
+      ws.currentRoomCode = currentRoomCode;
+
     } catch (error) {
       console.error('Error handling message:', error);
     }
@@ -662,6 +778,9 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     allClients.delete(ws);
+    if (ws.playerId) {
+      activePlayers.delete(ws.playerId);
+    }
 
     if (currentRoomCode && currentPlayerId) {
       const room = rooms.get(currentRoomCode);
