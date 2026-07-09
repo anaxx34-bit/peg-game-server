@@ -456,6 +456,11 @@ wss.on('connection', (ws) => {
             existingLobbyPlayer.isConnected = true;
             existingLobbyPlayer.ws = ws;
 
+            if (existingLobbyPlayer.disconnectTimer) {
+              clearTimeout(existingLobbyPlayer.disconnectTimer);
+              existingLobbyPlayer.disconnectTimer = null;
+            }
+
             ws.send(JSON.stringify({
               type: 'room_joined',
               roomCode: roomCode,
@@ -837,33 +842,57 @@ wss.on('connection', (ws) => {
               scheduleRoomDelete(currentRoomCode, room);
             }
           } else {
-            // Not in-game: remove immediately from lobby
-            room.players.splice(playerIndex, 1);
-            console.log(`Player ${player.name} left lobby ${currentRoomCode}`);
+            // Not in-game: mark as disconnected and keep in lobby for reconnection grace period (10s)
+            player.isConnected = false;
+            player.ws = null;
+            console.log(`Player ${player.name} disconnected (lobby) from room ${currentRoomCode}`);
 
-            if (room.players.filter(p => p.type === 'human').length === 0) {
-              rooms.delete(currentRoomCode);
-              console.log(`Room ${currentRoomCode} deleted (empty lobby)`);
-              if (room.isPublic) broadcastPublicRooms();
-            } else {
-              if (currentPlayerId === room.hostId) {
-                const nextHuman = room.players.find(p => p.type === 'human');
-                if (nextHuman) {
-                  room.hostId = nextHuman.id;
-                  nextHuman.isHost = true;
-                  nextHuman.isReady = true;
+            broadcastToRoom(currentRoomCode, {
+              type: 'room_update',
+              players: room.players.map(p => getClientInfo(p)),
+              hostId: room.hostId,
+              entryFee: room.entryFee || 100,
+            });
+            if (room.isPublic) broadcastPublicRooms();
+
+            if (player.disconnectTimer) {
+              clearTimeout(player.disconnectTimer);
+            }
+
+            player.disconnectTimer = setTimeout(() => {
+              const currentRoom = rooms.get(currentRoomCode);
+              if (!currentRoom) return;
+
+              const checkIndex = currentRoom.players.findIndex(p => p.id === currentPlayerId);
+              if (checkIndex !== -1 && !currentRoom.players[checkIndex].isConnected) {
+                currentRoom.players.splice(checkIndex, 1);
+                console.log(`Player ${player.name} removed from lobby ${currentRoomCode} after 10s grace period`);
+
+                const activeHumans = currentRoom.players.filter(p => p.type === 'human' && p.isConnected);
+                if (activeHumans.length === 0) {
+                  rooms.delete(currentRoomCode);
+                  console.log(`Room ${currentRoomCode} deleted (empty lobby after disconnect grace)`);
+                  if (currentRoom.isPublic) broadcastPublicRooms();
+                } else {
+                  if (currentPlayerId === currentRoom.hostId) {
+                    const nextHuman = currentRoom.players.find(p => p.type === 'human' && p.isConnected);
+                    if (nextHuman) {
+                      currentRoom.hostId = nextHuman.id;
+                      nextHuman.isHost = true;
+                      nextHuman.isReady = true;
+                    }
+                  }
+
+                  broadcastToRoom(currentRoomCode, {
+                    type: 'room_update',
+                    players: currentRoom.players.map(p => getClientInfo(p)),
+                    hostId: currentRoom.hostId,
+                    entryFee: currentRoom.entryFee || 100,
+                  });
+                  if (currentRoom.isPublic) broadcastPublicRooms();
                 }
               }
-
-              broadcastToRoom(currentRoomCode, {
-                type: 'room_update',
-                players: room.players.map(p => getClientInfo(p)),
-                hostId: room.hostId,
-                entryFee: room.entryFee || 100,
-              });
-
-              if (room.isPublic) broadcastPublicRooms();
-            }
+            }, 10000);
           }
         }
       }
