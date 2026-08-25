@@ -193,12 +193,15 @@ console.log('Running ServerGame tests...');
   game.handleRollRequest('p2', 'blue');
   game.handlePickRequest('p2', 'peg_6');
 
-  // Bomb explodes! Bob loses 5 points and gains 1 match point: (10 - 5 + 1 = 6)
-  assert.strictEqual(game.players[1].score, 6, 'Bob should have net 6 points (10 - 5 + 1 match)');
+  // Bomb explodes! Bob loses 5 points strictly (10 - 5 = 5), peg is NOT collected, color is NOT revealed
+  assert.strictEqual(game.players[1].score, 5, 'Bob should have net 5 points (10 - 5 = 5, no match points)');
+  const bombedPeg = game.pegs.find(p => p.id === 'peg_6');
+  assert.strictEqual(bombedPeg.isCollected, false, 'Bombed peg should NOT be collected');
+  assert.strictEqual(bombedPeg.isRevealed, false, 'Bombed peg should NOT be revealed');
   assert.strictEqual(game.bombedPegId, null, 'Bomb should be cleared after detonation');
   assert.strictEqual(game.bombBannerType, 'exploded');
 
-  console.log('✔ Test 6: 6x Combo Bomb Award, Placement, and Detonation passed');
+  console.log('✔ Test 6: 5x Combo Bomb Award, Placement, and Detonation passed');
 })();
 
 console.log('All ServerGame tests passed successfully! 🎉');

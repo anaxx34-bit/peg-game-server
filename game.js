@@ -226,8 +226,8 @@ class ServerGame {
     const usingShield = !usingMagicHand && this.shieldArmed && this.players[this.currentPlayerIndex].shields > 0;
     const usingSecondChance = !usingMagicHand && !usingShield && this.secondChanceArmed && this.players[this.currentPlayerIndex].secondChances > 0;
 
-    const matched = (peg.color === this.diceColor) || usingMagicHand;
     const isBombed = Boolean(this.bombedPegId && pegId === this.bombedPegId);
+    const matched = !isBombed && ((peg.color === this.diceColor) || usingMagicHand);
     const revealPicked = !isBombed && !peg.isRevealed && (this.pegs.filter(p => !p.isCollected).length > 2);
 
     let revealColor = null;
@@ -272,16 +272,6 @@ class ServerGame {
       const currentCombo = this.comboCount + 1;
       const multiplier = currentCombo >= 5 ? 5 : currentCombo >= 3 ? 3 : currentCombo >= 2 ? 2 : 1;
       const scoreGain = baseGain * multiplier;
-
-      // Check if this picked peg had a hidden bomb planted under it
-      if (this.bombedPegId && pegId === this.bombedPegId) {
-        player.score = Math.max(0, player.score - 5);
-        this.bombedPegId = null;
-        this.bombTurnsLeft = 0;
-        this.bombBannerSequence += 1;
-        this.bombBannerType = 'exploded';
-        this.bombBannerMessage = `💥 BOOM! ${player.name} triggered a Hidden Bomb! (-5 Points)`;
-      }
 
       // Update player stats
       player.score += scoreGain;
