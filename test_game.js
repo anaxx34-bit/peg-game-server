@@ -146,4 +146,59 @@ console.log('Running ServerGame tests...');
   console.log('✔ Test 5: Timeouts and Offline player skip passed');
 })();
 
+// ── Test 6: 6x Combo Bomb Award, Placement, and Detonation ──────────────────
+(function testBombMechanics() {
+  const players = [
+    { id: 'p1', name: 'Aman', type: 'human', isConnected: true },
+    { id: 'p2', name: 'Bob', type: 'human', isConnected: true }
+  ];
+  const pegs = [
+    { id: 'peg_0', color: 'red' },
+    { id: 'peg_1', color: 'red' },
+    { id: 'peg_2', color: 'red' },
+    { id: 'peg_3', color: 'red' },
+    { id: 'peg_4', color: 'red' },
+    { id: 'peg_5', color: 'red' },
+    { id: 'peg_6', color: 'blue' },
+    { id: 'peg_7', color: 'green' }
+  ];
+  const game = new ServerGame('ROOM1', players, pegs, { continueTurnOnMatch: true });
+
+  // P1 gets 5 consecutive matches in the same turn
+  for (let i = 0; i < 5; i++) {
+    game.handleRollRequest('p1', 'red');
+    const res = game.handlePickRequest('p1', `peg_${i}`);
+    assert.strictEqual(res.matched, true);
+  }
+
+  // After 5 matches, P1 should have 1 bomb in inventory
+  assert.strictEqual(game.players[0].bombs, 1, 'P1 should be awarded 1 bomb on 5x combo');
+
+  // P1 places bomb under peg_6
+  const placeRes = game.handlePlaceBombRequest('p1', 'peg_6');
+  assert.notStrictEqual(placeRes, null);
+  assert.strictEqual(game.players[0].bombs, 0, 'Bomb should be deducted from inventory');
+  assert.strictEqual(game.bombedPegId, 'peg_6');
+  assert.strictEqual(game.bombTurnsLeft, 4); // 2 players * 2 rounds = 4 turns
+
+  // P1 mismatches with peg_7 -> turn passes to Bob
+  game.handleRollRequest('p1', 'blue');
+  game.handlePickRequest('p1', 'peg_7');
+  assert.strictEqual(game.currentPlayerIndex, 1); // Bob's turn
+
+  // Bob has initial score 0. Let's give Bob 10 points to verify -5 penalty.
+  game.players[1].score = 10;
+
+  // Bob rolls blue and taps peg_6 (which has the hidden bomb and matches blue!)
+  game.handleRollRequest('p2', 'blue');
+  game.handlePickRequest('p2', 'peg_6');
+
+  // Bomb explodes! Bob loses 5 points and gains 1 match point: (10 - 5 + 1 = 6)
+  assert.strictEqual(game.players[1].score, 6, 'Bob should have net 6 points (10 - 5 + 1 match)');
+  assert.strictEqual(game.bombedPegId, null, 'Bomb should be cleared after detonation');
+  assert.strictEqual(game.bombBannerType, 'exploded');
+
+  console.log('✔ Test 6: 6x Combo Bomb Award, Placement, and Detonation passed');
+})();
+
 console.log('All ServerGame tests passed successfully! 🎉');

@@ -383,64 +383,73 @@ wss.on('connection', (ws) => {
           }
 
           if (room.inGame) {
-            // Check if player is reconnecting
-            const existingPlayer = room.players.find(p => p.id === message.playerId);
-            if (existingPlayer) {
-              currentPlayerId = message.playerId;
-              currentRoomCode = roomCode;
-              existingPlayer.isConnected = true;
-              existingPlayer.ws = ws;
+            // Check if game is actually finished on server
+            const isGameFinished = room.gameInstance && (room.gameInstance.isGameOver || room.gameInstance.isFinished || room.gameInstance.winnerId);
+            if (isGameFinished) {
+              room.inGame = false;
+              room.pegs = null;
+              room.gameState = null;
+              console.log(`Room ${roomCode} auto-reset from finished game to lobby for joining player`);
+            } else {
+              // Check if player is reconnecting
+              const existingPlayer = room.players.find(p => p.id === message.playerId);
+              if (existingPlayer) {
+                currentPlayerId = message.playerId;
+                currentRoomCode = roomCode;
+                existingPlayer.isConnected = true;
+                existingPlayer.ws = ws;
 
-              if (room.gameInstance) {
-                const gamePlayer = room.gameInstance.players.find(p => p.id === message.playerId);
-                if (gamePlayer) {
-                  gamePlayer.isConnected = true;
+                if (room.gameInstance) {
+                  const gamePlayer = room.gameInstance.players.find(p => p.id === message.playerId);
+                  if (gamePlayer) {
+                    gamePlayer.isConnected = true;
+                  }
+                  // Sync host just in case
+                  room.gameInstance.players.forEach(p => {
+                    p.isHost = (p.id === room.hostId);
+                  });
+                  room.gameState = room.gameInstance.getSnapshot();
                 }
-                // Sync host just in case
-                room.gameInstance.players.forEach(p => {
-                  p.isHost = (p.id === room.hostId);
+
+                // Cancel any pending room deletion
+                if (room.deleteTimer) {
+                  clearTimeout(room.deleteTimer);
+                  room.deleteTimer = null;
+                  console.log(`Room ${roomCode} deletion cancelled - player reconnected`);
+                }
+
+                console.log(`Player ${existingPlayer.name} reconnected to ${roomCode}`);
+
+                // Send full state for reconnection
+                ws.send(JSON.stringify({
+                  type: 'reconnected',
+                  roomCode: roomCode,
+                  players: room.players.map(p => getClientInfo(p)),
+                  hostId: room.hostId,
+                  inGame: true,
+                  pegs: room.pegs,
+                  entryFee: room.entryFee || 100,
+                  continueTurnOnMatch: room.settings ? room.settings.continueTurnOnMatch : true,
+                  timerEnabled: room.settings ? room.settings.timerEnabled : true,
+                  turnTimerSeconds: room.settings ? room.settings.turnTimerSeconds : 15,
+                  boardStyle: room.settings ? room.settings.boardStyle : 'flat2D3DDisc',
+                  boardFinish: room.settings ? room.settings.boardFinish : 'golden',
+                  pegFinish: room.settings ? room.settings.pegFinish : 'lightCream',
+                  gameState: room.gameState,
+                }));
+
+                // Notify others of reconnection
+                broadcastToRoom(roomCode, {
+                  type: 'player_reconnected',
+                  playerId: message.playerId,
+                  players: room.players.map(p => getClientInfo(p)),
                 });
-                room.gameState = room.gameInstance.getSnapshot();
+                return;
               }
 
-              // Cancel any pending room deletion
-              if (room.deleteTimer) {
-                clearTimeout(room.deleteTimer);
-                room.deleteTimer = null;
-                console.log(`Room ${roomCode} deletion cancelled - player reconnected`);
-              }
-
-              console.log(`Player ${existingPlayer.name} reconnected to ${roomCode}`);
-
-              // Send full state for reconnection
-              ws.send(JSON.stringify({
-                type: 'reconnected',
-                roomCode: roomCode,
-                players: room.players.map(p => getClientInfo(p)),
-                hostId: room.hostId,
-                inGame: true,
-                pegs: room.pegs,
-                entryFee: room.entryFee || 100,
-                continueTurnOnMatch: room.settings ? room.settings.continueTurnOnMatch : true,
-                timerEnabled: room.settings ? room.settings.timerEnabled : true,
-                turnTimerSeconds: room.settings ? room.settings.turnTimerSeconds : 15,
-                boardStyle: room.settings ? room.settings.boardStyle : 'flat2D3DDisc',
-                boardFinish: room.settings ? room.settings.boardFinish : 'golden',
-                pegFinish: room.settings ? room.settings.pegFinish : 'lightCream',
-                gameState: room.gameState,
-              }));
-
-              // Notify others of reconnection
-              broadcastToRoom(roomCode, {
-                type: 'player_reconnected',
-                playerId: message.playerId,
-                players: room.players.map(p => getClientInfo(p)),
-              });
+              ws.send(JSON.stringify({ type: 'error', message: 'Game already in progress' }));
               return;
             }
-
-            ws.send(JSON.stringify({ type: 'error', message: 'Game already in progress' }));
-            return;
           }
 
           if (room.players.length >= 6) {
@@ -742,6 +751,8 @@ wss.on('connection', (ws) => {
               result = room.gameInstance.handleSwapRequest(currentPlayerId, action.color);
             } else if (action.type === 'powerup_request') {
               result = room.gameInstance.handlePowerUpRequest(currentPlayerId, action.powerUpType);
+            } else if (action.type === 'place_bomb_request') {
+              result = room.gameInstance.handlePlaceBombRequest(currentPlayerId, action.pegId);
             } else if (action.type === 'timeout') {
               result = room.gameInstance.handleTimeout();
             } else if (action.type === 'emoji' || action.type === 'chat_quote') {
@@ -866,7 +877,7 @@ wss.on('connection', (ws) => {
               const checkIndex = currentRoom.players.findIndex(p => p.id === currentPlayerId);
               if (checkIndex !== -1 && !currentRoom.players[checkIndex].isConnected) {
                 currentRoom.players.splice(checkIndex, 1);
-                console.log(`Player ${player.name} removed from lobby ${currentRoomCode} after 10s grace period`);
+                console.log(`Player ${player.name} removed from lobby ${currentRoomCode} after 120s grace period`);
 
                 const activeHumans = currentRoom.players.filter(p => p.type === 'human' && p.isConnected);
                 if (activeHumans.length === 0) {
@@ -892,7 +903,7 @@ wss.on('connection', (ws) => {
                   if (currentRoom.isPublic) broadcastPublicRooms();
                 }
               }
-            }, 10000);
+            }, 120000);
           }
         }
       }

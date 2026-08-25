@@ -23,6 +23,7 @@ class ServerGame {
       magicHands: p.magicHands || 0,
       secondChances: p.secondChances || 0,
       swapDice: p.swapDice || 0,
+      bombs: p.bombs || 0,
       correctStreak: p.correctStreak || 0,
       matchStreak: p.matchStreak || 0,
       diceColorMatchCounts: p.diceColorMatchCounts || {}
@@ -47,6 +48,13 @@ class ServerGame {
     this.magicHandArmed = false;
     this.shieldArmed = false;
     this.secondChanceArmed = false;
+
+    this.bombedPegId = null;
+    this.bombPlacedByPlayerName = null;
+    this.bombTurnsLeft = 0;
+    this.bombBannerSequence = 0;
+    this.bombBannerMessage = null;
+    this.bombBannerType = null;
 
     this.comboCount = 0;
     this.lastComboSequence = 0;
@@ -92,7 +100,9 @@ class ServerGame {
     this.diceColor = color;
     this.phase = 'waitingForPick';
     this.lastPickedPegId = null;
-    this.message = `Find a hidden ${color} peg`;
+    this.message = this.shieldArmed
+      ? `🛡️ Shield armed: find a hidden ${color} peg`
+      : `Find a hidden ${color} peg`;
     
     this.turnTimeLeft = this.turnTimerSeconds;
 
@@ -141,7 +151,7 @@ class ServerGame {
 
   handlePowerUpRequest(playerId, powerUpType) {
     if (this.players[this.currentPlayerIndex].id !== playerId) return null;
-    if (this.phase !== 'waitingForPick') return null;
+    if (this.phase !== 'waitingForPick' && this.phase !== 'waitingForRoll') return null;
 
     const player = this.players[this.currentPlayerIndex];
     if (powerUpType === 'shield') {
@@ -153,9 +163,13 @@ class ServerGame {
         this.powerUpUsedSequence += 1;
         this.magicHandArmed = false;
         this.secondChanceArmed = false;
-        this.message = 'Shield armed!';
+        this.message = this.diceColor
+          ? `🛡️ Shield armed: find a hidden ${this.diceColor} peg`
+          : '🛡️ Shield armed: roll the dice';
       } else {
-        this.message = `Find a hidden ${this.diceColor} peg`;
+        this.message = this.diceColor
+          ? `Find a hidden ${this.diceColor} peg`
+          : `${player.name}, roll the dice`;
       }
     } else if (powerUpType === 'magicHand') {
       if (player.magicHands <= 0) return null;
@@ -166,9 +180,11 @@ class ServerGame {
         this.powerUpUsedSequence += 1;
         this.shieldArmed = false;
         this.secondChanceArmed = false;
-        this.message = 'Magic Hand armed! Tap any peg to collect it.';
+        this.message = '✨ Magic Hand armed! Tap any hidden peg to collect it.';
       } else {
-        this.message = `Find a hidden ${this.diceColor} peg`;
+        this.message = this.diceColor
+          ? `Find a hidden ${this.diceColor} peg`
+          : `${player.name}, roll the dice`;
       }
     } else if (powerUpType === 'secondChance') {
       if (player.secondChances <= 0) return null;
@@ -179,9 +195,13 @@ class ServerGame {
         this.powerUpUsedSequence += 1;
         this.shieldArmed = false;
         this.magicHandArmed = false;
-        this.message = 'Second Chance armed!';
+        this.message = this.diceColor
+          ? '🎯 Second Chance armed: mismatch = roll again!'
+          : '🎯 Second Chance armed: roll the dice';
       } else {
-        this.message = `Find a hidden ${this.diceColor} peg`;
+        this.message = this.diceColor
+          ? `Find a hidden ${this.diceColor} peg`
+          : `${player.name}, roll the dice`;
       }
     }
 
@@ -252,6 +272,16 @@ class ServerGame {
       const multiplier = currentCombo >= 5 ? 5 : currentCombo >= 3 ? 3 : currentCombo >= 2 ? 2 : 1;
       const scoreGain = baseGain * multiplier;
 
+      // Check if this picked peg had a hidden bomb planted under it
+      if (this.bombedPegId && pegId === this.bombedPegId) {
+        player.score = Math.max(0, player.score - 5);
+        this.bombedPegId = null;
+        this.bombTurnsLeft = 0;
+        this.bombBannerSequence += 1;
+        this.bombBannerType = 'exploded';
+        this.bombBannerMessage = `💥 BOOM! ${player.name} triggered the Bomb! (-5 Points)`;
+      }
+
       // Update player stats
       player.score += scoreGain;
       player.collection.push(peg.color);
@@ -264,12 +294,18 @@ class ServerGame {
       player.secondChances += (secondChanceEarned ? 1 : 0);
       player.swapDice += (swapDiceEarned ? 1 : 0);
 
+      const bombEarned = (this.comboCount + 1) === 5;
+      if (bombEarned) {
+        player.bombs = (player.bombs || 0) + 1;
+      }
+
       // Power Up awarded tracking
       const earnedTypes = [];
       if (shieldEarned) earnedTypes.push('shield');
       if (magicHandEarned) earnedTypes.push('magicHand');
       if (secondChanceEarned) earnedTypes.push('secondChance');
       if (swapDiceEarned) earnedTypes.push('swapDice');
+      if (bombEarned) earnedTypes.push('bomb');
 
       if (earnedTypes.length > 0) {
         this.powerUpAwardSequence += 1;
@@ -315,14 +351,25 @@ class ServerGame {
       // Mismatch
       const player = this.players[this.currentPlayerIndex];
       
+      // Check if this picked peg had a hidden bomb planted under it
+      if (this.bombedPegId && pegId === this.bombedPegId) {
+        player.score = Math.max(0, player.score - 5);
+        this.bombedPegId = null;
+        this.bombTurnsLeft = 0;
+        this.bombBannerSequence += 1;
+        this.bombBannerType = 'exploded';
+        this.bombBannerMessage = `💥 BOOM! ${player.name} triggered the Bomb! (-5 Points)`;
+      }
+
       if (usingShield) {
         player.shields -= 1;
         this.shieldArmed = false;
         this.lastPickedPegId = pegId;
-        this.message = 'Shield protected your streak! Try picking again.';
+        this.message = '🛡️ Shield protected your streak! Try picking again with the same dice.';
         this.pegs.forEach(p => {
           if (!p.isCollected) p.isRevealed = false;
         });
+        this.turnTimeLeft = this.turnTimerSeconds;
         // Player gets to retry pick immediately, turn does not change
       } else if (usingSecondChance) {
         player.secondChances -= 1;
@@ -353,6 +400,29 @@ class ServerGame {
       matched: matched,
       revealPicked: revealPicked,
       revealColor: revealColor,
+      snapshot: this.getSnapshot()
+    };
+  }
+
+  handlePlaceBombRequest(playerId, pegId) {
+    if (this.players[this.currentPlayerIndex].id !== playerId) return null;
+    const player = this.players[this.currentPlayerIndex];
+    if ((player.bombs || 0) <= 0) return null;
+
+    const peg = this.pegs.find(p => p.id === pegId);
+    if (!peg || peg.isCollected) return null;
+
+    player.bombs = Math.max(0, (player.bombs || 0) - 1);
+    this.bombedPegId = pegId;
+    this.bombPlacedByPlayerName = player.name;
+    this.bombTurnsLeft = this.players.length * 2;
+    this.bombBannerSequence += 1;
+    this.bombBannerType = 'placed';
+    this.bombBannerMessage = `💣 ${player.name} planted a HIDDEN BOMB under a disc! Be Alert! ⚠️`;
+
+    return {
+      type: 'place_bomb_result',
+      pegId: pegId,
       snapshot: this.getSnapshot()
     };
   }
@@ -402,6 +472,17 @@ class ServerGame {
     this.magicHandArmed = false;
     this.secondChanceArmed = false;
     this.comboCount = 0;
+
+    // Manage bomb timer and defusal
+    if (this.bombedPegId) {
+      this.bombTurnsLeft -= 1;
+      if (this.bombTurnsLeft <= 0) {
+        this.bombedPegId = null;
+        this.bombBannerSequence += 1;
+        this.bombBannerType = 'defused';
+        this.bombBannerMessage = '🛡️ Bomb has been defused automatically!';
+      }
+    }
 
     let nextIdx = (this.currentPlayerIndex + 1) % this.players.length;
     for (let i = 0; i < this.players.length; i++) {
@@ -523,6 +604,12 @@ class ServerGame {
       magicHandAwardedPlayerIndex: this.magicHandAwardedPlayerIndex,
       jackpotSequence: this.jackpotSequence,
       jackpotPlayerIndex: this.jackpotPlayerIndex,
+      bombedPegId: this.bombedPegId,
+      bombPlacedByPlayerName: this.bombPlacedByPlayerName,
+      bombTurnsLeft: this.bombTurnsLeft,
+      bombBannerSequence: this.bombBannerSequence,
+      bombBannerMessage: this.bombBannerMessage,
+      bombBannerType: this.bombBannerType,
       result: this.result,
       message: this.message,
       turnTimeLeft: this.turnTimeLeft,
