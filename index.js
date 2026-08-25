@@ -51,10 +51,14 @@ function getClientInfo(player) {
   };
 }
 
-// Helper to broadcast to a room
+// Helper to broadcast to a room with roomCode automatically attached
 function broadcastToRoom(roomCode, message) {
   const room = rooms.get(roomCode);
   if (!room) return;
+
+  if (typeof message === 'object' && message !== null && !message.roomCode) {
+    message.roomCode = roomCode;
+  }
 
   const data = JSON.stringify(message);
   room.players.forEach(player => {
@@ -113,14 +117,20 @@ function scheduleRoomDelete(roomCode, room) {
   }, ROOM_DELETE_GRACE_MS);
 }
 
-// Cleanly and immediately remove a player from all non-in-game lobby rooms
-function removePlayerFromLobbies(playerId, ws) {
+// Cleanly and immediately remove/disassociate a player from all rooms (both lobby and active in-game)
+function removePlayerFromAllRooms(playerId, ws) {
   rooms.forEach((room, roomCode) => {
-    if (!room.inGame) {
-      const pIndex = room.players.findIndex(p => (playerId && p.id === playerId) || (ws && p.ws === ws));
-      if (pIndex !== -1) {
-        const removed = room.players.splice(pIndex, 1)[0];
-        console.log(`Player ${removed.name} (${removed.id}) removed immediately from lobby room ${roomCode}`);
+    const pIndex = room.players.findIndex(p => (playerId && p.id === playerId) || (ws && p.ws === ws));
+    if (pIndex !== -1) {
+      const removed = room.players[pIndex];
+      // Sever the WebSocket connection for this player from this room immediately
+      removed.ws = null;
+      removed.isConnected = false;
+
+      if (!room.inGame) {
+        // Lobby room: splice out player immediately
+        room.players.splice(pIndex, 1);
+        console.log(`Player ${removed.name} (${removed.id}) removed from lobby room ${roomCode}`);
 
         const activeHumans = room.players.filter(p => p.type === 'human' && p.isConnected);
         if (activeHumans.length === 0) {
@@ -128,7 +138,7 @@ function removePlayerFromLobbies(playerId, ws) {
           console.log(`Room ${roomCode} deleted immediately (no active human players in lobby)`);
           if (room.isPublic) broadcastPublicRooms();
         } else {
-          // If the player who left was the host, migrate host to the next active human
+          // Migrate host if needed
           if (removed.id === room.hostId || removed.isHost) {
             const nextHost = activeHumans[0];
             room.hostId = nextHost.id;
@@ -144,6 +154,39 @@ function removePlayerFromLobbies(playerId, ws) {
             notification: `${removed.name} left the room`,
           });
           if (room.isPublic) broadcastPublicRooms();
+        }
+      } else {
+        // In-game room:
+        console.log(`Player ${removed.name} (${removed.id}) left in-game match ${roomCode}`);
+        const activeHumans = room.players.filter(p => p.type === 'human' && p.isConnected && p.ws);
+        if (activeHumans.length === 0) {
+          // If no active connected humans remain, terminate and delete this in-game room immediately
+          if (room.deleteTimer) clearTimeout(room.deleteTimer);
+          rooms.delete(roomCode);
+          console.log(`In-game room ${roomCode} terminated and deleted immediately (all human players left)`);
+        } else {
+          if (room.gameInstance) {
+            const gamePlayer = room.gameInstance.players.find(p => p.id === removed.id);
+            if (gamePlayer) {
+              gamePlayer.isConnected = false;
+              gamePlayer.isHost = false;
+            }
+          }
+          if (removed.id === room.hostId) {
+            const nextHost = activeHumans[0];
+            room.hostId = nextHost.id;
+            nextHost.isHost = true;
+            if (room.gameInstance) {
+              const gp = room.gameInstance.players.find(p => p.id === nextHost.id);
+              if (gp) gp.isHost = true;
+            }
+          }
+          broadcastToRoom(roomCode, {
+            type: 'player_disconnected',
+            playerId: removed.id,
+            players: room.players.map(p => getClientInfo(p)),
+            hostId: room.hostId,
+          });
         }
       }
     }
@@ -254,8 +297,8 @@ wss.on('connection', (ws) => {
         }
 
         case 'create_room': {
-          // Clean up any old lobby room this player was in before creating a new one
-          removePlayerFromLobbies(message.playerId, ws);
+          // Clean up any old rooms (both lobby and in-game) this player was in before creating a new one
+          removePlayerFromAllRooms(message.playerId, ws);
 
           const roomCode = generateRoomCode();
           currentPlayerId = message.playerId;
@@ -527,33 +570,8 @@ wss.on('connection', (ws) => {
             return;
           }
 
-          // Clean up any other lobby rooms this player might have been in
-          rooms.forEach((r, code) => {
-            if (code !== roomCode && !r.inGame) {
-              const pIdx = r.players.findIndex(p => p.id === message.playerId || p.ws === ws);
-              if (pIdx !== -1) {
-                const rem = r.players.splice(pIdx, 1)[0];
-                const activeH = r.players.filter(p => p.type === 'human' && p.isConnected);
-                if (activeH.length === 0) {
-                  rooms.delete(code);
-                  if (r.isPublic) broadcastPublicRooms();
-                } else {
-                  if (rem.id === r.hostId || rem.isHost) {
-                    r.hostId = activeH[0].id;
-                    activeH[0].isHost = true;
-                    activeH[0].isReady = true;
-                  }
-                  broadcastToRoom(code, {
-                    type: 'room_update',
-                    players: r.players.map(p => getClientInfo(p)),
-                    hostId: r.hostId,
-                    entryFee: r.entryFee || 100,
-                  });
-                  if (r.isPublic) broadcastPublicRooms();
-                }
-              }
-            }
-          });
+          // Clean up any other rooms (both lobby and in-game) this player might have been in
+          removePlayerFromAllRooms(message.playerId, ws);
 
           currentPlayerId = message.playerId;
           currentRoomCode = roomCode;
@@ -651,32 +669,25 @@ wss.on('connection', (ws) => {
         }
 
         case 'remove_player': {
+          const targetPlayerId = message.targetPlayerId || currentPlayerId;
+          const isLeaving = (targetPlayerId === currentPlayerId);
+
+          if (isLeaving) {
+            removePlayerFromAllRooms(currentPlayerId, ws);
+            currentRoomCode = null;
+            break;
+          }
+
           if (!currentRoomCode) return;
           const room = rooms.get(currentRoomCode);
           if (!room || room.inGame) return;
 
-          const targetPlayerId = message.targetPlayerId;
           const isKicking = currentPlayerId === room.hostId && targetPlayerId !== currentPlayerId;
-          const isLeaving = targetPlayerId === currentPlayerId;
-
-          if (isKicking || isLeaving) {
+          if (isKicking) {
             const playerIndex = room.players.findIndex(p => p.id === targetPlayerId);
             if (playerIndex !== -1) {
               const removedPlayer = room.players[playerIndex];
               room.players.splice(playerIndex, 1);
-
-              if (targetPlayerId === room.hostId && room.players.length > 0) {
-                const nextHuman = room.players.find(p => p.type === 'human');
-                if (nextHuman) {
-                  room.hostId = nextHuman.id;
-                  nextHuman.isHost = true;
-                  nextHuman.isReady = true;
-                } else {
-                  rooms.delete(currentRoomCode);
-                  if (room.isPublic) broadcastPublicRooms();
-                  return;
-                }
-              }
 
               if (removedPlayer.ws && removedPlayer.ws.readyState === 1) {
                 removedPlayer.ws.send(JSON.stringify({ type: 'kicked' }));
@@ -684,7 +695,7 @@ wss.on('connection', (ws) => {
 
               if (room.players.filter(p => p.type === 'human').length === 0) {
                 rooms.delete(currentRoomCode);
-                console.log(`Room ${currentRoomCode} deleted (empty)`);
+                console.log(`Room ${currentRoomCode} deleted (empty after kick)`);
               } else {
                 broadcastToRoom(currentRoomCode, {
                   type: 'room_update',
@@ -924,13 +935,13 @@ wss.on('connection', (ws) => {
             // Not in-game (Lobby / Waiting Room):
             // Remove disconnected player immediately, migrate host to next human or delete room if empty
             console.log(`Player ${player.name} disconnected from lobby room ${currentRoomCode}`);
-            removePlayerFromLobbies(currentPlayerId, ws);
+            removePlayerFromAllRooms(currentPlayerId, ws);
           }
         }
       }
     } else {
       // Fallback cleanup if currentRoomCode wasn't set on this socket
-      removePlayerFromLobbies(currentPlayerId, ws);
+      removePlayerFromAllRooms(currentPlayerId, ws);
     }
   });
 
