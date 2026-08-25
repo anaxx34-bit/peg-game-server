@@ -279,7 +279,7 @@ class ServerGame {
         this.bombTurnsLeft = 0;
         this.bombBannerSequence += 1;
         this.bombBannerType = 'exploded';
-        this.bombBannerMessage = `💥 BOOM! ${player.name} triggered the Bomb! (-5 Points)`;
+        this.bombBannerMessage = `💥 BOOM! ${player.name} triggered a Hidden Bomb! (-5 Points)`;
       }
 
       // Update player stats
@@ -358,7 +358,7 @@ class ServerGame {
         this.bombTurnsLeft = 0;
         this.bombBannerSequence += 1;
         this.bombBannerType = 'exploded';
-        this.bombBannerMessage = `💥 BOOM! ${player.name} triggered the Bomb! (-5 Points)`;
+        this.bombBannerMessage = `💥 BOOM! ${player.name} triggered a Hidden Bomb! (-5 Points)`;
       }
 
       if (usingShield) {
@@ -418,7 +418,7 @@ class ServerGame {
     this.bombTurnsLeft = this.players.length * 2;
     this.bombBannerSequence += 1;
     this.bombBannerType = 'placed';
-    this.bombBannerMessage = `💣 ${player.name} planted a HIDDEN BOMB under a disc! Be Alert! ⚠️`;
+    this.bombBannerMessage = `💣 ${player.name} planted a Hidden Bomb on the board!`;
 
     return {
       type: 'place_bomb_result',
@@ -480,7 +480,7 @@ class ServerGame {
         this.bombedPegId = null;
         this.bombBannerSequence += 1;
         this.bombBannerType = 'defused';
-        this.bombBannerMessage = '🛡️ Bomb has been defused automatically!';
+        this.bombBannerMessage = '💨 Hidden Bomb has safely defused!';
       }
     }
 
