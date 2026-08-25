@@ -227,7 +227,8 @@ class ServerGame {
     const usingSecondChance = !usingMagicHand && !usingShield && this.secondChanceArmed && this.players[this.currentPlayerIndex].secondChances > 0;
 
     const matched = (peg.color === this.diceColor) || usingMagicHand;
-    const revealPicked = !peg.isRevealed && (this.pegs.filter(p => !p.isCollected).length > 2);
+    const isBombed = Boolean(this.bombedPegId && pegId === this.bombedPegId);
+    const revealPicked = !isBombed && !peg.isRevealed && (this.pegs.filter(p => !p.isCollected).length > 2);
 
     let revealColor = null;
     if (revealPicked) {
@@ -385,11 +386,11 @@ class ServerGame {
           if (!p.isCollected) p.isRevealed = false;
         });
       } else {
-        if (revealPicked) peg.isRevealed = true;
+        if (revealPicked && !isBombed) peg.isRevealed = true;
         player.correctStreak = 0;
         player.matchStreak = 0;
         this.comboCount = 0;
-        this.lastPickedPegId = pegId;
+        this.lastPickedPegId = isBombed ? null : pegId;
         this._passTurn();
       }
     }
