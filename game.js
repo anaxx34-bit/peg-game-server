@@ -100,6 +100,8 @@ class ServerGame {
     this.diceColor = color;
     this.phase = 'waitingForPick';
     this.lastPickedPegId = null;
+    this.bombBannerType = null;
+    this.bombBannerMessage = null;
     this.message = this.shieldArmed
       ? `🛡️ Shield armed: find a hidden ${color} peg`
       : `Find a hidden ${color} peg`;
@@ -138,6 +140,8 @@ class ServerGame {
     this.diceColor = color;
     this.phase = 'waitingForPick';
     this.lastPickedPegId = null;
+    this.bombBannerType = null;
+    this.bombBannerMessage = null;
     this.message = `Swapped dice! Find a hidden ${color} peg`;
     
     this.turnTimeLeft = this.turnTimerSeconds;
